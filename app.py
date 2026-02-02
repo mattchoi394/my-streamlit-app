@@ -7,21 +7,26 @@ import requests
 import streamlit as st
 from openai import OpenAI  # pip install openai
 
+
 # =========================
 # Streamlit 설정
 # =========================
 st.set_page_config(page_title="🎬 나와 어울리는 영화는?", page_icon="🎬", layout="wide")
 st.title("🎬 나와 어울리는 영화는?")
-st.write("질문 5개로 취향을 분석하고, TMDB 추천 목록 중 **진짜 내가 좋아할 것 같은 영화 1개**를 AI가 최종 픽해줘요 🤖🍿")
+st.write(
+    "질문 5개로 취향을 분석하고, **TMDB에서 장르 적합성과 객관성(평점/투표수/필터)**을 강화해 추천해요 🍿✨\n"
+    "그리고 마지막엔 **후보 5개 중 AI가 1편만 최종 픽**해줘요 🤖"
+)
 
 TMDB_BASE = "https://api.themoviedb.org/3"
 
 # =========================
 # 장르/분석 설정
 # =========================
-# ✅ 수정 포인트: 로맨스/드라마 → 로맨스(10749)만 사용
+# ✅ 개선 포인트(장르 적합성):
+# - 로맨스/드라마는 "로맨스(10749)"로만 추천 (드라마 섞지 않음)
 CATEGORY_TO_GENRE_IDS = {
-    "로맨스/드라마": [10749],
+    "로맨스/드라마": [10749],  # ✅ 로맨스만
     "액션/어드벤처": [28],
     "SF/판타지": [878, 14],
     "코미디": [35],
@@ -37,12 +42,13 @@ CATEGORY_BADGE = {
 }
 
 REASON_BY_CATEGORY = {
-    "로맨스/드라마": "관계/감정선을 중요하게 여기는 선택이 많아서, TMDB 기준 **로맨스 영화(10749)** 위주로 추천할게요 💕",
-    "액션/어드벤처": "스케일과 추진력을 선호하는 선택이 많아서, 시원한 전개가 있는 **액션/어드벤처**가 잘 맞아요 💥",
-    "SF/판타지": "상상력과 세계관을 즐기는 선택이 많아서, 다른 세계로 떠나는 **SF/판타지**가 잘 맞아요 🚀",
-    "코미디": "가볍게 즐기고 웃는 포인트를 중요하게 여겨서, 기분전환 되는 **코미디**가 잘 맞아요 😂",
+    "로맨스/드라마": "관계/감정선을 중요하게 여기는 선택이 많아서, TMDB 기준 **로맨스(10749)** 영화만 엄격하게 골라요 💕",
+    "액션/어드벤처": "스케일과 추진력을 선호하는 선택이 많아서, 시원한 전개가 있는 **액션(28)** 중심으로 골라요 💥",
+    "SF/판타지": "상상력/세계관을 즐기는 선택이 많아서, **SF(878)/판타지(14)** 중심으로 골라요 🚀",
+    "코미디": "가볍게 즐기고 웃는 포인트를 중요하게 여겨서, **코미디(35)** 중심으로 골라요 😂",
 }
 
+# TMDB Discover sort_by 매핑
 SORT_OPTIONS = {
     "인기순 (TMDB)": ("popularity.desc", False),
     "평점 높은순 (TMDB)": ("vote_average.desc", False),
@@ -51,36 +57,58 @@ SORT_OPTIONS = {
     "개인 취향 가중치 (로컬 점수)": (None, True),
 }
 
+
 # =========================
 # 사이드바: API 키/옵션
 # =========================
 with st.sidebar:
     st.header("🔑 API 설정")
-
     tmdb_key = st.text_input("TMDB API Key", type="password", placeholder="TMDB API Key 입력")
     openai_key = st.text_input("OpenAI API Key", type="password", placeholder="OpenAI API Key 입력")
 
     st.divider()
+    st.header("🎛️ 추천 품질(객관성/장르 적합성) 필터")
+
+    # ✅ 객관성 강화 필터
+    min_vote_count = st.slider("최소 투표수(vote_count)", 0, 5000, 300, 50)
+    min_vote_avg = st.slider("최소 평점(vote_average)", 0.0, 9.0, 6.5, 0.1)
+    require_poster = st.toggle("포스터 있는 작품만", value=True)
+    require_overview = st.toggle("줄거리 있는 작품만", value=True)
+
+    # ✅ 장르 적합성 강화
+    strict_genre = st.toggle("장르 엄격 모드(추천 리스트)", value=True)
+    st.caption(
+        "- 켜짐: 후보 영화의 **상세 장르에 목표 장르가 실제 포함**된 것만 통과\n"
+        "- 혼합 장르(동점/근접)일 때도 더 엄격하게 걸러요"
+    )
+
+    st.divider()
+    st.header("🧭 정렬/가중치")
     sort_label = st.selectbox("정렬 옵션", list(SORT_OPTIONS.keys()), index=0)
 
-    st.subheader("🎛️ 개인 취향 가중치(슬라이더)")
+    st.subheader("개인 취향 가중치(슬라이더)")
     st.caption("‘개인 취향 가중치(로컬 점수)’ 정렬에서만 적용돼요.")
     w_recency = st.slider("최신성 가중치", 0, 100, 30, 5)
     w_rating = st.slider("평점 가중치", 0, 100, 50, 5)
     w_votes = st.slider("투표수 가중치", 0, 100, 20, 5)
 
     st.divider()
-    st.subheader("🤖 최종 1개 AI 추천")
-    st.caption("TMDB 추천 5개 중에서, AI가 당신 취향에 가장 맞는 영화 1개를 최종 선택해요.")
-    llm_strict = st.toggle("엄격 선택(정확히 1개만)", value=True)
+    st.header("🤖 최종 1편 AI 픽")
     llm_model = st.text_input("OpenAI 모델", value="gpt-4o-mini")
 
-st.divider()
 
 # =========================
 # 분석/유틸 함수
 # =========================
-def analyze_genre(selected_indices: List[int]) -> Tuple[str, List[int], Dict[str, int], Optional[str]]:
+def analyze_genre(selected_indices: List[int]) -> Tuple[str, List[int], Dict[str, int], Optional[str], Optional[str]]:
+    """
+    - 1등 카테고리 선정
+    - 동점/근접(1점 차)이면 2개 카테고리 혼합
+    - 혼합 시 discover with_genres를 OR(|)로 넓게 가져오되,
+      strict_genre=True일 때는 후처리에서 더 엄격하게(AND처럼) 필터 가능
+    반환:
+      primary_category, genre_ids, counts, blended_label, secondary_category(optional)
+    """
     counts = {k: 0 for k in CATEGORY_TO_GENRE_IDS.keys()}
     for idx in selected_indices:
         counts[INDEX_TO_CATEGORY[idx]] += 1
@@ -90,16 +118,19 @@ def analyze_genre(selected_indices: List[int]) -> Tuple[str, List[int], Dict[str
     second_cat, second_score = ranked[1]
 
     blended = None
-    # 동점 또는 1점 차이면 OR로 섞기
+    secondary = None
+
     if top_score == second_score or (top_score - second_score == 1):
+        secondary = second_cat
         blended = f"{top_cat} + {second_cat}"
         genre_ids = list(set(CATEGORY_TO_GENRE_IDS[top_cat] + CATEGORY_TO_GENRE_IDS[second_cat]))
-        return top_cat, genre_ids, counts, blended
+        return top_cat, genre_ids, counts, blended, secondary
 
-    return top_cat, CATEGORY_TO_GENRE_IDS[top_cat], counts, None
+    return top_cat, CATEGORY_TO_GENRE_IDS[top_cat], counts, None, None
 
 
 def with_genres_or(genre_ids: List[int]) -> str:
+    # discover 단계는 폭넓게 후보를 가져오기 위해 OR로 묶음
     return "|".join(str(g) for g in genre_ids)
 
 
@@ -180,65 +211,183 @@ def compute_personal_score(
     w_rating: float,
     w_votes: float,
 ) -> float:
+    """
+    개인 취향 점수(로컬):
+    - 선호도(해당 카테고리 선택 비율) + 최신성/평점/투표수(슬라이더)
+    """
     rating = float(movie.get("vote_average") or 0.0)  # 0~10
     vote_count = float(movie.get("vote_count") or 0.0)
     release_date = parse_date_yyyymmdd(movie.get("release_date") or "")
 
-    # 선호도(0~1)
-    pref_weight = float(chosen_counts.get(primary_category, 0)) / 5.0
+    pref_weight = float(chosen_counts.get(primary_category, 0)) / 5.0  # 0~1
 
-    # 최신성(0~1): 1년 기준 감쇠
     recency = 0.0
     if release_date:
         days = max((datetime.now() - release_date).days, 0)
-        recency = max(0.0, 1.0 - (days / 365.0))
+        recency = max(0.0, 1.0 - (days / 365.0))  # 1년 감쇠
 
-    # 투표수(0~1): sqrt 완화 + 캡
     vote_component = 0.0
     if vote_count > 0:
-        vote_component = min(1.0, (vote_count ** 0.5) / 200.0)
+        vote_component = min(1.0, (vote_count ** 0.5) / 200.0)  # 완화
 
-    # 평점(0~1)
     rating_component = max(0.0, min(1.0, rating / 10.0))
 
-    # 가중치(0~1)
     wr = w_recency / 100.0
     wra = w_rating / 100.0
     wv = w_votes / 100.0
 
+    # 선호도는 기본 가산(고정)
     score = (pref_weight * 1.5) + (recency * wr) + (rating_component * wra) + (vote_component * wv)
     return score
 
 
 def why_recommended_text(category: str) -> str:
     if category == "로맨스/드라마":
-        return "TMDB 로맨스(10749) 기준으로 **설레거나 감정선이 살아있는 로맨스 영화** 위주로 골랐어요 💕"
+        return "TMDB 로맨스(10749) 기준으로 **로맨스 장르가 실제 포함된 작품만** 엄격히 골랐어요 💕"
     if category == "액션/어드벤처":
-        return "전개가 빠르고 에너지가 확 올라가서, 스트레스 풀기 딱 좋아요 💥"
+        return "액션(28) 장르가 실제 포함된 작품만 엄격히 골랐어요 💥"
     if category == "SF/판타지":
-        return "현실을 잠깐 잊고 세계관에 빠지기 좋아서, 머리 환기하기 좋아요 🚀"
-    return "가볍게 웃고 넘어갈 수 있어서, 과제/시험 기간에도 부담 없이 보기 좋아요 😂"
+        return "SF(878)/판타지(14) 장르가 실제 포함된 작품만 엄격히 골랐어요 🚀"
+    return "코미디(35) 장르가 실제 포함된 작품만 엄격히 골랐어요 😂"
 
 
+# =========================
+# ✅ 핵심 개선: “객관성 + 장르 적합성” 강화된 후보 선정
+# =========================
+def passes_quality_filters(
+    movie: Dict,
+    cfg: Dict,
+    min_vote_count: int,
+    min_vote_avg: float,
+    require_poster: bool,
+    require_overview: bool,
+) -> bool:
+    if float(movie.get("vote_average") or 0.0) < float(min_vote_avg):
+        return False
+    if int(movie.get("vote_count") or 0) < int(min_vote_count):
+        return False
+    if require_overview and not (movie.get("overview") or "").strip():
+        return False
+    if require_poster and not movie.get("poster_path"):
+        return False
+    # 포스터 URL 유효성(구성값 기반)
+    if require_poster:
+        if not build_poster_url(cfg, movie.get("poster_path")):
+            return False
+    return True
+
+
+def movie_has_required_genres(detail: Dict, required_any: List[int], required_all: Optional[List[int]] = None) -> bool:
+    """
+    detail["genres"] 는 [{"id":..,"name":..}, ...]
+    - required_any: 이 중 하나라도 포함되면 OK (기본)
+    - required_all: 이것이 주어지면 '모두 포함'해야 OK (혼합 장르를 엄격 AND로 만들 때)
+    """
+    genres = detail.get("genres") or []
+    ids = {g.get("id") for g in genres if isinstance(g, dict)}
+
+    if required_all:
+        return all(g in ids for g in required_all)
+
+    return any(g in ids for g in required_any)
+
+
+def build_candidates_strict(
+    api_key: str,
+    cfg: Dict,
+    with_genres: str,
+    sort_by: str,
+    primary_required_ids: List[int],
+    secondary_required_ids: Optional[List[int]],
+    strict_genre: bool,
+    min_vote_count: int,
+    min_vote_avg: float,
+    require_poster: bool,
+    require_overview: bool,
+    fetch_pages: int = 3,
+    per_page_take: int = 20,
+    target_n: int = 5,
+) -> List[Dict]:
+    """
+    discover로 폭넓게 후보를 가져온 뒤,
+    - (1) 객관 필터(min vote_count / min vote_avg / poster / overview)
+    - (2) 장르 적합성 검증(상세 genre id 확인)
+    을 통과한 것만 모아 TOP 5 반환.
+
+    strict_genre=True & (혼합 장르일 때 secondary 존재)면:
+      - primary 장르 AND secondary 장르를 모두 포함해야 통과(더 엄격)
+    """
+    picked: List[Dict] = []
+    seen = set()
+
+    # 혼합 장르 엄격 조건(AND)
+    required_all = None
+    if strict_genre and secondary_required_ids:
+        # 혼합일 때: primary의 대표 1개 + secondary의 대표 1개를 "모두 포함" 요구
+        # (각 카테고리의 첫 장르를 대표로 사용)
+        required_all = [primary_required_ids[0], secondary_required_ids[0]]
+
+    for page in range(1, fetch_pages + 1):
+        raw = discover_movies(api_key, with_genres, sort_by=sort_by, page=page, n=per_page_take)
+
+        for m in raw:
+            mid = int(m.get("id") or 0)
+            if not mid or mid in seen:
+                continue
+            seen.add(mid)
+
+            # discover 응답 기준으로 1차 품질 필터 (빠르게)
+            if not passes_quality_filters(m, cfg, min_vote_count, min_vote_avg, require_poster, require_overview):
+                continue
+
+            # 상세 호출 후 장르 적합성 확인
+            try:
+                d = movie_details(api_key, mid, language="ko-KR")
+            except Exception:
+                continue
+
+            # strict genre 검증:
+            # - 기본: primary_required_ids 중 하나라도 포함
+            # - 혼합+엄격: primary 대표 + secondary 대표 모두 포함
+            required_any = primary_required_ids
+            if required_all:
+                ok = movie_has_required_genres(d, required_any=required_any, required_all=required_all)
+            else:
+                ok = movie_has_required_genres(d, required_any=required_any)
+
+            if not ok:
+                continue
+
+            merged = {**m, **d}  # detail 우선
+            # detail 기반으로도 품질 필터 재검증(더 정확)
+            if not passes_quality_filters(merged, cfg, min_vote_count, min_vote_avg, require_poster, require_overview):
+                continue
+
+            picked.append(merged)
+            if len(picked) >= target_n:
+                return picked
+
+    return picked
+
+
+# =========================
+# LLM 최종 1편 픽
+# =========================
 def safe_json_extract(text: str) -> Optional[dict]:
-    """LLM 출력에서 JSON만 최대한 뽑아오기(방어적 파싱)."""
     if not text:
         return None
-    # 1) 코드블록 JSON 우선
     m = re.search(r"```json\s*(\{.*?\})\s*```", text, re.DOTALL)
     if m:
         try:
             return json.loads(m.group(1))
         except Exception:
             pass
-    # 2) 첫 { ... } 덩어리 파싱
     m = re.search(r"(\{.*\})", text, re.DOTALL)
     if m:
         blob = m.group(1)
         try:
             return json.loads(blob)
         except Exception:
-            # trailing comma 등 가벼운 오류 보정 시도
             try:
                 blob2 = re.sub(r",\s*}", "}", blob)
                 blob2 = re.sub(r",\s*]", "]", blob2)
@@ -253,76 +402,60 @@ def llm_pick_one_movie(
     model: str,
     user_profile: Dict,
     candidates: List[Dict],
-    strict_one: bool = True,
 ) -> Tuple[Optional[int], str]:
     """
     candidates: [{id,title,vote_average,vote_count,release_date,overview,genres(list[str])}, ...]
-    반환: (movie_id, explanation_markdown)
     """
     client = OpenAI(api_key=openai_api_key)
 
-    # 후보를 너무 길게 보내지 않도록 요약
     compact = []
     for c in candidates:
         compact.append(
             {
                 "id": c.get("id"),
-                "title": c.get("title"),
+                "title": c.get("title") or c.get("name"),
                 "vote_average": c.get("vote_average"),
                 "vote_count": c.get("vote_count"),
                 "release_date": c.get("release_date"),
                 "genres": c.get("genres", []),
-                "overview": c.get("overview", "")[:600],
+                "overview": (c.get("overview") or "")[:650],
             }
         )
 
     system = (
-        "너는 대학생 사용자의 '영화 취향 심리테스트' 결과를 바탕으로, "
-        "주어진 후보 영화들 중에서 사용자가 '진짜 좋아할 확률'이 가장 높은 영화 1개를 고르는 추천 전문가야. "
-        "사용자의 취향(장르 성향/선호 가중치/분위기)을 최우선으로 반영하고, "
-        "가능하면 '입문 난이도(부담 없는 선택)'와 '만족도'를 함께 고려해."
+        "너는 대학생 사용자의 심리테스트 결과를 바탕으로, 후보 영화 중 '가장 좋아할 확률'이 높은 영화 1편을 고르는 추천 전문가야. "
+        "사용자의 성향(선택한 답변의 분위기/장르 선호)을 최우선으로, "
+        "그 다음으로는 객관 지표(평점/투표수)와 접근성(부담 없는 선택)을 고려해."
     )
 
-    # 엄격 모드면 1개만, 아니면 1개 + 대안 1개를 같이 제안할 수도 있는데
-    # 이번 요구사항은 "단 한 개"라서 기본 strict=True로 두고, 항상 1개만 반환하도록 지시.
-    strict_rule = (
-        "반드시 후보 중 정확히 1개의 id만 선택해. 다른 영화는 추천하지 마."
-        if strict_one
-        else "가능하면 1개를 선택하되, 정말 동률이면 1개를 선택하고 그 이유를 더 설득력 있게 써."
-    )
-
-    user = {
-        "instruction": "후보 영화 중 최종 추천 1개를 선택해줘.",
+    payload = {
+        "task": "pick_exactly_one",
         "user_profile": user_profile,
         "candidates": compact,
-        "output_format": {
+        "output_schema": {
             "movie_id": "number (must be one of candidates.id)",
-            "reason": "string (Korean, 2~4문장, 구체적으로)",
-            "why_youll_like": ["string", "string", "string"],  # 3개 불릿
+            "reason": "string (Korean, 2~4 sentences, specific)",
+            "why_youll_like": ["string", "string", "string"],
         },
         "rules": [
-            strict_rule,
-            "출력은 반드시 JSON만. 다른 텍스트/설명/코드블록 금지.",
-            "reason/why_youll_like는 한국어로.",
+            "반드시 후보 중 정확히 1개의 id만 선택해.",
+            "출력은 반드시 JSON만. 다른 텍스트/코드블록/설명 금지.",
+            "한국어로 작성.",
         ],
     }
 
-    # Responses API 사용 (권장)
     resp = client.responses.create(
         model=model,
         input=[
             {"role": "system", "content": system},
-            {"role": "user", "content": json.dumps(user, ensure_ascii=False)},
+            {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
         ],
     )
 
-    # 응답 텍스트 추출(최대한 호환적으로)
     text_out = ""
     try:
-        # 최신 SDK는 output_text 제공
         text_out = resp.output_text
     except Exception:
-        # fallback: 구조 탐색
         try:
             for item in resp.output:
                 if item.type == "message":
@@ -359,6 +492,7 @@ def llm_pick_one_movie(
 # =========================
 # 질문 5개
 # =========================
+st.subheader("📝 질문에 답해주세요")
 q1_options = [
     "💕 좋아하는 사람과 카페에서 오래 얘기하기",
     "💥 친구들이랑 바로 여행이나 액티비티 떠나기",
@@ -396,8 +530,6 @@ q3 = st.radio("3) 주말에 영화 한 편을 본다면?", q3_options, index=0)
 q4 = st.radio("4) 영화 속 주인공이 된다면 더 끌리는 역할은?", q4_options, index=0)
 q5 = st.radio("5) 친구들이 말하는 나의 이미지와 가장 가까운 건?", q5_options, index=0)
 
-st.divider()
-
 selected_indices = [
     q1_options.index(q1),
     q2_options.index(q2),
@@ -406,6 +538,7 @@ selected_indices = [
     q5_options.index(q5),
 ]
 
+st.divider()
 
 # =========================
 # 결과 보기
@@ -420,7 +553,7 @@ if st.button("🔮 결과 보기"):
 
     # 1) 분석
     with st.spinner("🧠 답변을 분석 중..."):
-        category, genre_ids, counts, blended = analyze_genre(selected_indices)
+        category, genre_ids, counts, blended, secondary_category = analyze_genre(selected_indices)
 
     badge = CATEGORY_BADGE[category]
     st.markdown(f"## 🎯 당신에게 딱인 장르는: **{badge} {category}**!")
@@ -434,110 +567,130 @@ if st.button("🔮 결과 보기"):
         except requests.RequestException:
             cfg = {"images": {"secure_base_url": "https://image.tmdb.org/t/p/", "poster_sizes": ["w500"]}}
 
-    # 3) TMDB 추천 5개 만들기 (정렬 옵션 반영)
+    # 3) 후보를 "엄격 필터"로 만들기
     sort_by, is_personal = SORT_OPTIONS[sort_label]
     with_genres = with_genres_or(genre_ids)
 
-    with st.spinner("🎬 TMDB에서 추천 영화를 불러오는 중..."):
+    # 개인 취향 점수 모드면 후보 수집 정렬은 popularity로 하고, 나중에 점수로 재정렬
+    discover_sort_for_fetch = "popularity.desc" if is_personal else (sort_by or "popularity.desc")
+
+    # 장르 검증을 위해: primary/secondary의 “대표 장르 id”
+    primary_required = CATEGORY_TO_GENRE_IDS[category]
+    secondary_required = CATEGORY_TO_GENRE_IDS.get(secondary_category) if secondary_category else None
+
+    with st.spinner("🎬 TMDB에서 후보를 모으고, 장르/객관 필터로 엄격 선별 중..."):
         try:
-            if is_personal:
-                candidates = discover_movies(
-                    tmdb_key,
-                    with_genres,
-                    sort_by="popularity.desc",
-                    page=1,
-                    n=40,
-                )
-                scored = []
-                for m in candidates:
-                    score = compute_personal_score(
-                        m,
-                        category,
-                        counts,
-                        w_recency=w_recency,
-                        w_rating=w_rating,
-                        w_votes=w_votes,
-                    )
-                    scored.append((score, m))
-                scored.sort(key=lambda x: x[0], reverse=True)
-                movies = [m for _, m in scored[:5]]
-            else:
-                movies = discover_movies(tmdb_key, with_genres, sort_by=sort_by, page=1, n=5)
+            filtered = build_candidates_strict(
+                api_key=tmdb_key,
+                cfg=cfg,
+                with_genres=with_genres,
+                sort_by=discover_sort_for_fetch,
+                primary_required_ids=primary_required,
+                secondary_required_ids=secondary_required,
+                strict_genre=strict_genre,
+                min_vote_count=min_vote_count,
+                min_vote_avg=min_vote_avg,
+                require_poster=require_poster,
+                require_overview=require_overview,
+                fetch_pages=4,          # 더 많이 뒤져서 품질 높이기
+                per_page_take=20,
+                target_n=15 if is_personal else 5,  # 개인점수면 후보 넉넉히
+            )
         except requests.RequestException as e:
             st.error("TMDB 요청에 실패했어요. API Key/네트워크를 확인해주세요.")
             st.caption(f"에러: {e}")
             st.stop()
 
-    if not movies:
-        st.warning("추천할 영화를 찾지 못했어요. 다른 선택으로 다시 시도해보세요!")
+    if not filtered:
+        st.warning(
+            "조건을 만족하는 영화를 찾지 못했어요 😢\n\n"
+            "👉 해결 팁: 최소 평점/최소 투표수를 낮추거나, '포스터/줄거리 있는 작품만' 옵션을 꺼보세요."
+        )
         st.stop()
 
-    header = "### 🍿 TMDB 추천 후보 TOP 5"
+    # 4) 최종 후보 5개로 정렬/선정
+    if is_personal:
+        # 개인 점수로 재정렬해서 TOP5
+        scored = []
+        for m in filtered:
+            s = compute_personal_score(
+                m,
+                category,
+                counts,
+                w_recency=w_recency,
+                w_rating=w_rating,
+                w_votes=w_votes,
+            )
+            scored.append((s, m))
+        scored.sort(key=lambda x: x[0], reverse=True)
+        movies = [m for _, m in scored[:5]]
+    else:
+        # TMDB 정렬을 사용한 경우: filtered가 이미 상위부터 들어오므로 앞 5개
+        movies = filtered[:5]
+
+    # 5) 표시 헤더
+    header = "### 🍿 추천 영화 TOP 5 (장르/객관 필터 적용)"
     if blended:
-        header += f" (취향 믹스: {blended})"
+        header += f" · 취향 믹스: {blended}"
     header += f" · 정렬: {sort_label}"
     st.markdown(header)
+    st.caption(
+        f"적용 필터: 평점 ≥ {min_vote_avg}, 투표수 ≥ {min_vote_count}"
+        + (" · 포스터필수" if require_poster else "")
+        + (" · 줄거리필수" if require_overview else "")
+        + (" · 장르엄격" if strict_genre else "")
+    )
 
-    # 4) 후보 영화 상세를 LLM 입력용으로 준비 (필요 최소 호출)
-    #    - overview/genres 등은 movie_details에서 더 정확한 값을 얻을 수 있음
+    # 6) LLM 입력용 후보 준비
     llm_candidates = []
-    with st.spinner("📚 후보 영화 상세 정보를 정리 중..."):
-        for m in movies:
-            mid = int(m.get("id"))
-            try:
-                d = movie_details(tmdb_key, mid, language="ko-KR")
-            except Exception:
-                d = {}
+    for m in movies:
+        genres = m.get("genres") or []
+        genre_names = [g.get("name") for g in genres if isinstance(g, dict) and g.get("name")]
+        llm_candidates.append(
+            {
+                "id": int(m.get("id")),
+                "title": m.get("title") or "제목 없음",
+                "vote_average": float(m.get("vote_average") or 0.0),
+                "vote_count": int(m.get("vote_count") or 0),
+                "release_date": m.get("release_date") or "",
+                "overview": (m.get("overview") or "").strip(),
+                "genres": genre_names,
+                "poster_path": m.get("poster_path"),
+            }
+        )
 
-            merged = {**m, **d}  # detail 우선
-            genres = merged.get("genres") or []
-            genre_names = [g.get("name") for g in genres if isinstance(g, dict) and g.get("name")]
-
-            llm_candidates.append(
-                {
-                    "id": mid,
-                    "title": merged.get("title") or "제목 없음",
-                    "vote_average": float(merged.get("vote_average") or 0.0),
-                    "vote_count": int(merged.get("vote_count") or 0),
-                    "release_date": merged.get("release_date") or "",
-                    "overview": (merged.get("overview") or "").strip(),
-                    "genres": genre_names,
-                    "poster_path": merged.get("poster_path"),
-                }
-            )
-
-    # 5) 🤖 LLM 최종 1개 픽
     user_profile = {
         "primary_category": category,
         "category_counts": counts,
-        "selected_choices": {
-            "q1": q1,
-            "q2": q2,
-            "q3": q3,
-            "q4": q4,
-            "q5": q5,
-        },
+        "selected_choices": {"q1": q1, "q2": q2, "q3": q3, "q4": q4, "q5": q5},
         "sorting_mode": sort_label,
         "personal_weights": {"recency": w_recency, "rating": w_rating, "votes": w_votes},
-        "note": "대학생 대상, 부담 없이 즐길 수 있는 만족도 높은 1편을 골라줘.",
+        "quality_filters": {
+            "min_vote_average": min_vote_avg,
+            "min_vote_count": min_vote_count,
+            "strict_genre": strict_genre,
+            "require_poster": require_poster,
+            "require_overview": require_overview,
+        },
+        "note": "대학생 기준으로, 부담 없이 재미/만족도가 높을 1편을 골라줘.",
     }
 
-    with st.spinner("🤖 AI가 ‘진짜 취향저격’ 영화 1개를 고르는 중..."):
+    # 7) 🤖 최종 1편 픽
+    with st.spinner("🤖 AI가 후보 5개 중 ‘진짜 취향저격’ 1편을 고르는 중..."):
         picked_id, picked_md = llm_pick_one_movie(
             openai_api_key=openai_key,
             model=llm_model,
             user_profile=user_profile,
             candidates=llm_candidates,
-            strict_one=llm_strict,
         )
 
-    # 6) 최종 추천 표시
+    # 8) 최종 추천 표시
     if picked_id is None:
-        st.error("AI 최종 추천을 만들지 못했어요. (대신 후보 목록만 보여줄게요)")
+        st.error("AI 최종 추천을 만들지 못했어요. (후보 목록만 보여줄게요)")
     else:
         picked = next((x for x in llm_candidates if x["id"] == picked_id), None)
         if not picked:
-            st.error("AI가 고른 영화가 후보에 없어요. (대신 후보 목록만 보여줄게요)")
+            st.error("AI가 고른 영화가 후보에 없어요. (후보 목록만 보여줄게요)")
         else:
             st.markdown("## ⭐ 최종 추천 1편")
             poster = build_poster_url(cfg, picked.get("poster_path"))
@@ -550,6 +703,7 @@ if st.button("🔮 결과 보기"):
             with right:
                 st.markdown(f"### 🎬 {picked['title']}")
                 st.markdown(f"⭐ 평점: **{picked['vote_average']:.1f}** / 10")
+                st.markdown(f"🗳️ 투표수: **{picked['vote_count']}**")
                 rd = picked.get("release_date") or "정보 없음"
                 st.markdown(f"🗓️ 개봉일: {rd}")
                 if picked.get("genres"):
@@ -561,17 +715,16 @@ if st.button("🔮 결과 보기"):
 
             st.divider()
 
-    # 7) 후보 5개 카드(3열) 표시 + 상세
-    st.markdown("### 🧩 후보 5개 전체 보기")
+    # 9) 후보 5개 카드(3열) 표시 + 상세
+    st.markdown("### 🧩 추천 리스트 TOP 5")
     cols = st.columns(3, gap="large")
+
     for i, c in enumerate(llm_candidates):
         col = cols[i % 3]
         title = c.get("title") or "제목 없음"
         rating = float(c.get("vote_average") or 0.0)
         poster = build_poster_url(cfg, c.get("poster_path"))
-
         is_picked = (picked_id is not None and c["id"] == picked_id)
-        badge = "✅ 최종 픽" if is_picked else "후보"
 
         with col:
             with st.container(border=True):
@@ -581,7 +734,7 @@ if st.button("🔮 결과 보기"):
                     st.write("🖼️ 포스터 없음")
 
                 st.markdown(f"**{title}**")
-                st.caption(f"⭐ 평점: {rating:.1f} / 10 · {badge}")
+                st.caption(f"⭐ 평점: {rating:.1f} / 10 · 🗳️ {c.get('vote_count', 0)}" + (" · ✅ 최종 픽" if is_picked else ""))
 
                 with st.expander("📌 상세 정보 보기"):
                     st.markdown(f"💡 **추천 이유(장르 기반)**: {why_recommended_text(category)}")
