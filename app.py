@@ -1,49 +1,23 @@
 import streamlit as st
 import requests
+from datetime import datetime
 from typing import Dict, List, Tuple, Optional
 
-# -------------------------
-# Streamlit 기본 설정
-# -------------------------
 st.set_page_config(page_title="🎬 나와 어울리는 영화는?", page_icon="🎬", layout="wide")
-st.title("🎬 나와 어울리는 영화는?")
-st.write("질문 5개로 당신의 영화 취향(장르)을 분석하고, TMDB에서 인기 영화를 추천해드려요 🍿✨")
 
-with st.sidebar:
-    st.header("🔑 TMDB 설정")
-    tmdb_key = st.text_input("TMDB API Key", type="password", placeholder="여기에 TMDB API Key 입력")
-    st.caption("API Key는 저장되지 않아요. (세션 동안만 사용)")
+# =========================
+# TMDB / 장르 설정
+# =========================
+TMDB_BASE = "https://api.themoviedb.org/3"
 
-st.divider()
-
-# -------------------------
-# (선택) tmdbsimple 사용 시도
-# -------------------------
-USE_TMDBSIMPLE = False
-try:
-    import tmdbsimple as tmdb  # type: ignore
-    USE_TMDBSIMPLE = True
-except Exception:
-    USE_TMDBSIMPLE = False
-
-# -------------------------
-# 장르/분석 로직 (고도화)
-# -------------------------
 CATEGORY_TO_GENRE_IDS = {
-    # "로맨스/드라마"는 로맨스(10749) + 드라마(18) 모두 후보로 둠
-    "로맨스/드라마": [10749, 18],
+    "로맨스/드라마": [10749, 18],  # 로맨스 + 드라마
     "액션/어드벤처": [28],
-    "SF/판타지": [878, 14],
+    "SF/판타지": [878, 14],        # SF + 판타지
     "코미디": [35],
 }
 
-# 4지선다 인덱스(0~3) -> 카테고리
-INDEX_TO_CATEGORY = {
-    0: "로맨스/드라마",
-    1: "액션/어드벤처",
-    2: "SF/판타지",
-    3: "코미디",
-}
+INDEX_TO_CATEGORY = {0: "로맨스/드라마", 1: "액션/어드벤처", 2: "SF/판타지", 3: "코미디"}
 
 CATEGORY_BADGE = {
     "로맨스/드라마": "💕",
@@ -59,15 +33,19 @@ REASON_BY_CATEGORY = {
     "코미디": "가볍게 즐기고 웃는 포인트를 중요하게 여겨서, 기분전환 되는 **코미디**가 잘 맞아요 😂",
 }
 
+# TMDB Discover sort_by 매핑
+SORT_OPTIONS = {
+    "인기순 (TMDB)": ("popularity.desc", False),
+    "평점 높은순 (TMDB)": ("vote_average.desc", False),
+    "최신 개봉순 (TMDB)": ("primary_release_date.desc", False),
+    "투표수 많은순 (TMDB)": ("vote_count.desc", False),
+    "개인 취향 가중치 (로컬 점수)": (None, True),  # 로컬 재정렬
+}
+
 def analyze_genre(selected_indices: List[int]) -> Tuple[str, List[int], Dict[str, int], Optional[str]]:
     """
-    선택 결과로 카테고리 점수 집계 후,
-    1등 장르를 선택하되 동점/근접이면 2개 장르를 섞어 추천 폭을 넓힘(OR 조합).
-    return:
-      - primary_category
-      - genre_ids_for_discover (여러 개일 수 있음: OR 조합)
-      - counts
-      - blended_category (있으면 "A + B" 형태, 없으면 None)
+    1등 카테고리 선택.
+    동점/근접(1점 차)이면 2개 카테고리를 OR로 섞어 추천 폭 확장.
     """
     counts = {k: 0 for k in CATEGORY_TO_GENRE_IDS.keys()}
     for idx in selected_indices:
@@ -77,40 +55,21 @@ def analyze_genre(selected_indices: List[int]) -> Tuple[str, List[int], Dict[str
     top_cat, top_score = ranked[0]
     second_cat, second_score = ranked[1]
 
-    # 고도화: 동점 또는 1점 차이면 장르를 섞어서(OR) 더 다양하게 추천
     blended = None
     if top_score == second_score or (top_score - second_score == 1):
         blended = f"{top_cat} + {second_cat}"
         genre_ids = list(set(CATEGORY_TO_GENRE_IDS[top_cat] + CATEGORY_TO_GENRE_IDS[second_cat]))
         return top_cat, genre_ids, counts, blended
 
-    genre_ids = CATEGORY_TO_GENRE_IDS[top_cat]
-    return top_cat, genre_ids, counts, None
+    return top_cat, CATEGORY_TO_GENRE_IDS[top_cat], counts, None
 
-
-def build_with_genres_param(genre_ids: List[int]) -> str:
-    """
-    with_genres에 여러 장르를 넣을 때:
-    - OR: '28|35' 처럼 파이프(|)
-    - AND: '28,35' 처럼 콤마(,)
-    여기서는 '추천 폭을 넓히기' 목적이므로 OR(|) 사용.
-    (comma/pipe 조합 의미는 discover 필터 설명에 존재 :contentReference[oaicite:3]{index=3})
-    """
+def with_genres_or(genre_ids: List[int]) -> str:
+    # OR 조합은 | 사용
     return "|".join(str(g) for g in genre_ids)
 
-
-# -------------------------
-# TMDB API 호출 (configuration + discover + details)
-# -------------------------
-TMDB_BASE = "https://api.themoviedb.org/3"
-
-@st.cache_data(show_spinner=False, ttl=60 * 60 * 24)  # 24h
+@st.cache_data(show_spinner=False, ttl=60 * 60 * 24)
 def tmdb_get_configuration(api_key: str) -> Dict:
-    """
-    이미지 URL은 configuration에서 base_url/size 조합을 권장(캐시 권장) :contentReference[oaicite:4]{index=4}
-    """
-    url = f"{TMDB_BASE}/configuration"
-    r = requests.get(url, params={"api_key": api_key}, timeout=15)
+    r = requests.get(f"{TMDB_BASE}/configuration", params={"api_key": api_key}, timeout=15)
     r.raise_for_status()
     return r.json()
 
@@ -118,7 +77,6 @@ def pick_poster_size(cfg: Dict, prefer: str = "w500") -> str:
     sizes = (cfg.get("images") or {}).get("poster_sizes") or []
     if prefer in sizes:
         return prefer
-    # 없으면 가능한 것 중 적당한 크기 선택
     for candidate in ["w500", "w342", "w780", "original"]:
         if candidate in sizes:
             return candidate
@@ -130,75 +88,107 @@ def build_poster_url(cfg: Dict, poster_path: Optional[str]) -> Optional[str]:
     images = cfg.get("images") or {}
     base = images.get("secure_base_url") or images.get("base_url")
     if not base:
-        # fallback
         return "https://image.tmdb.org/t/p/w500" + poster_path
     size = pick_poster_size(cfg, "w500")
     return f"{base}{size}{poster_path}"
 
 @st.cache_data(show_spinner=False, ttl=300)
-def discover_movies(api_key: str, with_genres: str, language: str = "ko-KR", n: int = 5) -> List[Dict]:
-    url = f"{TMDB_BASE}/discover/movie"
+def discover_movies(
+    api_key: str,
+    with_genres: str,
+    language: str = "ko-KR",
+    sort_by: str = "popularity.desc",
+    page: int = 1,
+    n: int = 20,
+) -> List[Dict]:
     params = {
         "api_key": api_key,
         "with_genres": with_genres,
         "language": language,
-        "sort_by": "popularity.desc",
+        "sort_by": sort_by,
         "include_adult": "false",
-        "page": 1,
+        "page": page,
     }
-    r = requests.get(url, params=params, timeout=15)
+    r = requests.get(f"{TMDB_BASE}/discover/movie", params=params, timeout=15)
     r.raise_for_status()
     data = r.json()
     return (data.get("results") or [])[:n]
 
-@st.cache_data(show_spinner=False, ttl=60 * 60)  # 1h
+@st.cache_data(show_spinner=False, ttl=60 * 60)
 def movie_details(api_key: str, movie_id: int, language: str = "ko-KR") -> Dict:
-    # 상세 정보(런타임/장르/개봉일 등)
-    url = f"{TMDB_BASE}/movie/{movie_id}"
-    params = {
-        "api_key": api_key,
-        "language": language,
-        # credits도 같이 가져오고 싶다면 아래 주석 해제
-        # "append_to_response": "credits",
-    }
-    r = requests.get(url, params=params, timeout=15)
+    r = requests.get(f"{TMDB_BASE}/movie/{movie_id}", params={"api_key": api_key, "language": language}, timeout=15)
     r.raise_for_status()
     return r.json()
 
-def make_reco_reason(category: str, movie: Dict) -> str:
+def parse_date_yyyymmdd(s: str) -> Optional[datetime]:
+    try:
+        return datetime.strptime(s, "%Y-%m-%d")
+    except Exception:
+        return None
+
+def compute_personal_score(movie: Dict, primary_category: str, chosen_counts: Dict[str, int]) -> float:
     """
-    간단 추천 이유: 장르 기반 + 영화 특징(평점/키워드) 조금 반영
+    개인 취향 가중치(로컬):
+    - 장르 매칭(선택 분포 기반) + 평점 + 투표수 + 최신성(약하게)
     """
-    rating = float(movie.get("vote_average") or 0.0)
-    overview = (movie.get("overview") or "").lower()
+    rating = float(movie.get("vote_average") or 0.0)         # 0~10
+    vote_count = float(movie.get("vote_count") or 0.0)       # 큰 값
+    release_date = parse_date_yyyymmdd(movie.get("release_date") or "")
+    today = datetime.now()
 
-    base = {
-        "로맨스/드라마": "감정선에 몰입하기 좋고, 대학 생활의 관계 고민과도 공감 포인트가 있어요 💕",
-        "액션/어드벤처": "전개가 빠르고 에너지 충전이 돼서, 스트레스 풀기 좋아요 💥",
-        "SF/판타지": "세계관에 빠져 현실을 잠깐 잊고 머리 환기하기 좋아요 🚀",
-        "코미디": "부담 없이 웃으면서 보기 좋아서 기분전환에 딱이에요 😂",
-    }[category]
+    # 최신성 점수(0~1 정도): 최근일수록 조금 가산
+    recency = 0.0
+    if release_date:
+        days = max((today - release_date).days, 0)
+        # 0일=1.0, 365일 이상=0.0으로 선형 감소 (너무 과하면 취향을 깨서 약하게만 반영)
+        recency = max(0.0, 1.0 - (days / 365.0))
 
-    # 평점 보너스 문구
-    if rating >= 7.5:
-        base += " (평점도 꽤 높아요 ⭐)"
+    # 취향 분포(0~5): 사용자가 그 장르를 많이 고를수록 가중치 증가
+    pref_weight = float(chosen_counts.get(primary_category, 0)) / 5.0  # 0~1
+    # 투표수는 스케일이 너무 커서 로그 형태로 완화
+    vote_component = (0.0 if vote_count <= 0 else (min(1.0, (vote_count ** 0.5) / 200.0)))
 
-    # 줄거리 키워드 기반 살짝 보정
-    if category == "로맨스/드라마" and any(k in overview for k in ["사랑", "연애", "관계", "가족"]):
-        base += " (내용도 감정선 중심!)"
-    if category == "액션/어드벤처" and any(k in overview for k in ["전쟁", "추격", "미션", "탈출"]):
-        base += " (액션 키워드가 딱!)"
-    if category == "SF/판타지" and any(k in overview for k in ["우주", "미래", "마법", "괴물", "외계"]):
-        base += " (세계관 취향 저격!)"
-    if category == "코미디" and any(k in overview for k in ["웃", "코미디", "유쾌", "엉뚱"]):
-        base += " (웃음 포인트 기대!)"
+    # 최종 점수(가중치는 취향 중심으로)
+    score = (
+        (pref_weight * 2.0) +
+        (rating / 10.0 * 1.4) +
+        (vote_component * 0.9) +
+        (recency * 0.4)
+    )
+    return score
 
-    return base
+def why_recommended_text(category: str) -> str:
+    if category == "로맨스/드라마":
+        return "감정선이 진하고 공감 포인트가 많아서, 바쁜 학기 중에도 몰입해서 보기 좋아요 💕"
+    if category == "액션/어드벤처":
+        return "전개가 빠르고 에너지가 확 올라가서, 스트레스 풀기 딱 좋아요 💥"
+    if category == "SF/판타지":
+        return "현실을 잠깐 잊고 세계관에 빠지기 좋아서, 머리 환기하기 좋아요 🚀"
+    return "가볍게 웃고 넘어갈 수 있어서, 과제/시험 기간에도 부담 없이 보기 좋아요 😂"
 
 
-# -------------------------
-# 질문 5개 UI
-# -------------------------
+# =========================
+# UI
+# =========================
+st.title("🎬 나와 어울리는 영화는?")
+st.write("질문 5개로 당신의 영화 취향(장르)을 분석하고, 그 장르의 인기 영화를 추천해드려요 🍿✨")
+
+with st.sidebar:
+    st.header("🔑 TMDB 설정")
+    tmdb_key = st.text_input("TMDB API Key", type="password", placeholder="여기에 TMDB API Key 입력")
+    st.divider()
+    sort_label = st.selectbox(
+        "정렬 옵션",
+        list(SORT_OPTIONS.keys()),
+        index=0
+    )
+    st.caption("※ ‘개인 취향 가중치’는 후보를 더 많이 불러온 뒤 점수로 재정렬해요.")
+
+st.divider()
+
+# =========================
+# 질문 5개
+# =========================
 q1_options = [
     "💕 좋아하는 사람과 카페에서 오래 얘기하기",
     "💥 친구들이랑 바로 여행이나 액티비티 떠나기",
@@ -246,9 +236,9 @@ selected_indices = [
     q5_options.index(q5),
 ]
 
-# -------------------------
-# 결과 보기 (예쁘게 + 고도화)
-# -------------------------
+# =========================
+# 결과 보기
+# =========================
 if st.button("🔮 결과 보기"):
     if not tmdb_key:
         st.error("TMDB API Key를 사이드바에 입력해주세요! 🔑")
@@ -263,38 +253,41 @@ if st.button("🔮 결과 보기"):
     st.info(REASON_BY_CATEGORY[category])
     st.caption(f"📊 선택 분포: {counts}")
 
-    # 2) configuration (이미지 url 고도화)
+    # 2) 포스터 설정
     with st.spinner("🖼️ 포스터 설정을 불러오는 중..."):
         try:
             cfg = tmdb_get_configuration(tmdb_key)
-        except requests.RequestException as e:
-            st.warning("configuration을 불러오지 못해 기본 포스터 URL(w500)로 진행할게요.")
+        except requests.RequestException:
             cfg = {"images": {"secure_base_url": "https://image.tmdb.org/t/p/", "poster_sizes": ["w500"]}}
-            st.caption(f"에러: {e}")
 
-    # 3) discover
-    with_genres = build_with_genres_param(genre_ids)
-    discover_title = f"🎁 추천 영화 TOP 5"
-    if blended:
-        discover_title += f" (취향 믹스: {blended})"
+    # 3) 영화 가져오기 + 정렬
+    sort_by, is_personal = SORT_OPTIONS[sort_label]
+    with_genres = with_genres_or(genre_ids)
 
-    with st.spinner("🎬 TMDB에서 인기 영화를 불러오는 중..."):
+    with st.spinner("🎬 TMDB에서 영화를 불러오는 중..."):
         try:
-            # tmdbsimple이 있으면 사용(선택), 없으면 requests 사용
-            if USE_TMDBSIMPLE:
-                tmdb.API_KEY = tmdb_key
-                d = tmdb.Discover()
-                # with_genres는 문자열로 전달 (예: "28|35")
-                resp = d.movie(with_genres=with_genres, language="ko-KR", sort_by="popularity.desc")
-                movies = (resp.get("results") or [])[:5]
+            if is_personal:
+                # 후보를 넉넉히 불러온 뒤(예: 30개) 로컬 점수로 재정렬
+                candidates = discover_movies(
+                    tmdb_key, with_genres,
+                    sort_by="popularity.desc",  # 후보 수집은 기본 정렬로
+                    page=1, n=30
+                )
+                # 점수화
+                scored = []
+                for m in candidates:
+                    scored.append((compute_personal_score(m, category, counts), m))
+                scored.sort(key=lambda x: x[0], reverse=True)
+                movies = [m for _, m in scored[:5]]
             else:
-                movies = discover_movies(tmdb_key, with_genres, n=5)
-        except requests.HTTPError as e:
-            st.error("TMDB API 요청에 실패했어요. API Key가 올바른지 확인해주세요.")
-            st.caption(f"에러: {e}")
-            st.stop()
-        except Exception as e:
-            st.error("TMDB 요청 중 오류가 발생했어요.")
+                # TMDB 자체 정렬
+                movies = discover_movies(
+                    tmdb_key, with_genres,
+                    sort_by=sort_by,
+                    page=1, n=5
+                )
+        except requests.RequestException as e:
+            st.error("TMDB 요청에 실패했어요. API Key/네트워크를 확인해주세요.")
             st.caption(f"에러: {e}")
             st.stop()
 
@@ -302,11 +295,14 @@ if st.button("🔮 결과 보기"):
         st.warning("추천할 영화를 찾지 못했어요. 다른 선택으로 다시 시도해보세요!")
         st.stop()
 
-    st.markdown(f"### {discover_title}")
+    title = "### 🍿 추천 영화 TOP 5"
+    if blended:
+        title += f" (취향 믹스: {blended})"
+    title += f" · 정렬: {sort_label}"
+    st.markdown(title)
 
     # 4) 3열 카드 + expander 상세
     cols = st.columns(3, gap="large")
-
     for i, m in enumerate(movies):
         col = cols[i % 3]
         movie_id = int(m.get("id"))
@@ -325,7 +321,6 @@ if st.button("🔮 결과 보기"):
                 st.caption(f"⭐ 평점: {rating:.1f} / 10")
 
                 with st.expander("📌 상세 정보 보기"):
-                    # 상세 정보는 필요할 때만 로딩 (고도화: 불필요한 호출 줄이기)
                     with st.spinner("📚 상세 정보를 불러오는 중..."):
                         try:
                             detail = movie_details(tmdb_key, movie_id, language="ko-KR")
@@ -337,9 +332,11 @@ if st.button("🔮 결과 보기"):
                     runtime = detail.get("runtime")
                     genres = detail.get("genres") or []
                     genre_names = ", ".join(g.get("name") for g in genres if g.get("name")) or "정보 없음"
+                    vote_count = detail.get("vote_count") or m.get("vote_count") or "정보 없음"
 
                     st.markdown(f"🗓️ **개봉일**: {release_date}")
                     st.markdown(f"🏷️ **장르**: {genre_names}")
+                    st.markdown(f"🗳️ **투표수**: {vote_count}")
                     if runtime:
                         st.markdown(f"⏱️ **러닝타임**: {runtime}분")
 
@@ -347,6 +344,4 @@ if st.button("🔮 결과 보기"):
                     st.write(overview)
 
                     st.markdown("💡 **이 영화를 추천하는 이유**")
-                    st.write(make_reco_reason(category, detail or m))
-
-    st.caption("※ 인기순(popularity) 기반 추천이며, 동점/근접 점수일 때는 장르를 섞어서 더 폭넓게 추천해요.")
+                    st.write(why_recommended_text(category))
