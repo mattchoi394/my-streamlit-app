@@ -1,20 +1,19 @@
 import streamlit as st
 import requests
 
-st.set_page_config(page_title="🎬 나와 어울리는 영화는?", page_icon="🎬")
+st.set_page_config(page_title="🎬 나와 어울리는 영화는?", page_icon="🎬", layout="wide")
 
 # =========================
 # TMDB 설정
 # =========================
 GENRE_IDS = {
-    "액션/어드벤처": 28,     # (요구사항에 제공된 ID 기준)
+    "로맨스/드라마": 18,     # 기본: 드라마
+    "액션/어드벤처": 28,
+    "SF/판타지": 878,        # 기본: SF
     "코미디": 35,
-    "로맨스/드라마": 18,    # 기본은 드라마로 (로맨스 10749도 있지만 1개 장르만 고르기 위해)
-    "SF/판타지": 878,       # 기본은 SF로 (판타지 14도 있지만 1개 장르만 고르기 위해)
 }
 
-# 선택지 인덱스(0~3) -> 장르 카테고리 매핑
-# 각 질문의 4개 선택지는 순서대로:
+# 각 질문의 4개 선택지 순서:
 # 0: 로맨스/드라마, 1: 액션/어드벤처, 2: SF/판타지, 3: 코미디
 INDEX_TO_CATEGORY = {
     0: "로맨스/드라마",
@@ -24,20 +23,18 @@ INDEX_TO_CATEGORY = {
 }
 
 REASON_BY_CATEGORY = {
-    "로맨스/드라마": "감정선과 관계에 공감하는 선택이 많아서, 몰입감 있는 **드라마/로맨스 계열**이 잘 맞아요 💕",
-    "액션/어드벤처": "스케일과 추진력을 선호하는 선택이 많아서, 시원한 전개가 있는 **액션/어드벤처 계열**이 잘 맞아요 💥",
-    "SF/판타지": "상상력과 세계관을 즐기는 선택이 많아서, 다른 세계로 떠나는 **SF/판타지 계열**이 잘 맞아요 🚀",
-    "코미디": "가볍게 즐기고 웃는 포인트를 중요하게 여겨서, 기분전환 되는 **코미디 계열**이 잘 맞아요 😂",
+    "로맨스/드라마": "감정선과 관계에 공감하는 선택이 많아서, 몰입감 있는 **드라마/로맨스**가 잘 맞아요 💕",
+    "액션/어드벤처": "스케일과 추진력을 선호하는 선택이 많아서, 시원한 전개가 있는 **액션/어드벤처**가 잘 맞아요 💥",
+    "SF/판타지": "상상력과 세계관을 즐기는 선택이 많아서, 다른 세계로 떠나는 **SF/판타지**가 잘 맞아요 🚀",
+    "코미디": "가볍게 즐기고 웃는 포인트를 중요하게 여겨서, 기분전환 되는 **코미디**가 잘 맞아요 😂",
 }
 
 def analyze_genre(selected_indices):
-    """선택 인덱스 리스트(0~3)를 받아 가장 많이 고른 장르를 결정"""
     counts = {k: 0 for k in GENRE_IDS.keys()}
     for idx in selected_indices:
         cat = INDEX_TO_CATEGORY[idx]
         counts[cat] += 1
 
-    # 가장 높은 득표 장르 (동점이면 앞에 나온 쪽이 선택됨)
     best_category = max(counts, key=counts.get)
     genre_id = GENRE_IDS[best_category]
     return best_category, genre_id, counts
@@ -45,7 +42,6 @@ def analyze_genre(selected_indices):
 
 @st.cache_data(show_spinner=False, ttl=300)
 def fetch_popular_movies_by_genre(api_key, genre_id, language="ko-KR", n=5):
-    """TMDB discover/movie로 장르 인기 영화 가져오기"""
     url = "https://api.themoviedb.org/3/discover/movie"
     params = {
         "api_key": api_key,
@@ -58,8 +54,7 @@ def fetch_popular_movies_by_genre(api_key, genre_id, language="ko-KR", n=5):
     r = requests.get(url, params=params, timeout=15)
     r.raise_for_status()
     data = r.json()
-    results = data.get("results", [])
-    return results[:n]
+    return (data.get("results") or [])[:n]
 
 
 def poster_url(poster_path):
@@ -68,11 +63,21 @@ def poster_url(poster_path):
     return "https://image.tmdb.org/t/p/w500" + poster_path
 
 
+def why_recommended_text(category):
+    if category == "로맨스/드라마":
+        return "감정선이 진하고 공감 포인트가 많아서, 바쁜 학기 중에도 몰입해서 보기 좋아요 💕"
+    if category == "액션/어드벤처":
+        return "전개가 빠르고 에너지가 확 올라가서, 스트레스 풀기 딱 좋아요 💥"
+    if category == "SF/판타지":
+        return "현실을 잠깐 잊고 세계관에 빠지기 좋아서, 머리 환기하기 좋아요 🚀"
+    return "가볍게 웃고 넘어갈 수 있어서, 과제/시험 기간에도 부담 없이 보기 좋아요 😂"
+
+
 # =========================
 # UI
 # =========================
 st.title("🎬 나와 어울리는 영화는?")
-st.write("간단한 질문 5개로 당신의 영화 취향(장르)을 분석하고, 그 장르의 인기 영화를 추천해드려요 🍿✨")
+st.write("질문 5개로 당신의 영화 취향(장르)을 분석하고, 그 장르의 인기 영화를 추천해드려요 🍿✨")
 
 with st.sidebar:
     st.header("🔑 TMDB 설정")
@@ -82,7 +87,7 @@ with st.sidebar:
 st.divider()
 
 # =========================
-# 질문 (이전 턴에서 만든 5개)
+# 질문 5개
 # =========================
 q1_options = [
     "💕 좋아하는 사람과 카페에서 오래 얘기하기",
@@ -123,7 +128,7 @@ q5 = st.radio("5) 친구들이 말하는 나의 이미지와 가장 가까운 �
 
 st.divider()
 
-# 선택지 -> 인덱스로 변환
+# 선택지 인덱스
 selected_indices = [
     q1_options.index(q1),
     q2_options.index(q2),
@@ -132,6 +137,9 @@ selected_indices = [
     q5_options.index(q5),
 ]
 
+# =========================
+# 결과 보기
+# =========================
 if st.button("🔮 결과 보기"):
     if not tmdb_key:
         st.error("TMDB API Key를 사이드바에 입력해주세요! 🔑")
@@ -140,55 +148,52 @@ if st.button("🔮 결과 보기"):
     with st.spinner("🧠 분석 중..."):
         category, genre_id, counts = analyze_genre(selected_indices)
 
-    st.subheader("✅ 분석 결과")
-    st.write(f"당신에게 잘 맞는 장르는 **{category}** 입니다!")
-    st.caption(f"선택 분포: {counts}")
+    st.markdown(f"## 🏷️ 당신에게 딱인 장르는: **{category}**!")
     st.info(REASON_BY_CATEGORY[category])
 
-    st.subheader("🎁 인기 영화 추천 TOP 5")
-
-    try:
-        movies = fetch_popular_movies_by_genre(tmdb_key, genre_id, n=5)
-    except requests.HTTPError as e:
-        st.error("TMDB API 요청에 실패했어요. API Key가 올바른지 확인해주세요.")
-        st.caption(f"에러: {e}")
-        st.stop()
-    except requests.RequestException as e:
-        st.error("네트워크 오류로 TMDB 요청에 실패했어요. 잠시 후 다시 시도해주세요.")
-        st.caption(f"에러: {e}")
-        st.stop()
+    with st.spinner("🎁 TMDB에서 인기 영화를 불러오는 중..."):
+        try:
+            movies = fetch_popular_movies_by_genre(tmdb_key, genre_id, n=5)
+        except requests.HTTPError as e:
+            st.error("TMDB API 요청에 실패했어요. API Key가 올바른지 확인해주세요.")
+            st.caption(f"에러: {e}")
+            st.stop()
+        except requests.RequestException as e:
+            st.error("네트워크 오류로 TMDB 요청에 실패했어요. 잠시 후 다시 시도해주세요.")
+            st.caption(f"에러: {e}")
+            st.stop()
 
     if not movies:
         st.warning("추천할 영화를 찾지 못했어요. 다른 장르로 다시 시도해보세요!")
         st.stop()
 
-    for i, m in enumerate(movies, start=1):
+    st.markdown("### 🍿 추천 영화 TOP 5")
+
+    # 3열 카드 레이아웃
+    cols = st.columns(3, gap="large")
+
+    for i, m in enumerate(movies):
+        col = cols[i % 3]
+
         title = m.get("title") or m.get("name") or "제목 없음"
-        rating = m.get("vote_average", 0)
+        rating = m.get("vote_average", 0.0)
         overview = (m.get("overview") or "").strip() or "줄거리 정보가 없어요."
         purl = poster_url(m.get("poster_path"))
 
-        with st.container(border=True):
-            cols = st.columns([1, 2], gap="large")
-            with cols[0]:
+        with col:
+            # 카드 느낌을 주기 위해 컨테이너(border=True)
+            with st.container(border=True):
                 if purl:
                     st.image(purl, use_container_width=True)
                 else:
                     st.write("🖼️ 포스터 없음")
 
-            with cols[1]:
-                st.markdown(f"### {i}. {title}")
-                st.markdown(f"⭐ 평점: **{rating:.1f}** / 10")
-                st.markdown(f"📝 줄거리: {overview}")
+                st.markdown(f"**{title}**")
+                st.caption(f"⭐ 평점: {rating:.1f} / 10")
 
-                # 간단한 추천 이유 (장르 기반 + 대학생 맥락)
-                if category == "로맨스/드라마":
-                    why = "감정선이 진하고 공감 포인트가 많아서, 바쁜 학기 중에도 몰입해서 보기 좋아요 💕"
-                elif category == "액션/어드벤처":
-                    why = "전개가 빠르고 에너지가 확 올라가서, 스트레스 풀기 딱 좋아요 💥"
-                elif category == "SF/판타지":
-                    why = "현실을 잠깐 잊고 세계관에 빠지기 좋아서, 머리 환기하기 좋아요 🚀"
-                else:  # 코미디
-                    why = "가볍게 웃고 넘어갈 수 있어서, 과제/시험 기간에도 부담 없이 보기 좋아요 😂"
+                # 클릭(펼치기)하면 상세
+                with st.expander("📌 상세 보기"):
+                    st.markdown(f"📝 **줄거리**\n\n{overview}")
+                    st.markdown(f"💡 **이 영화를 추천하는 이유**\n\n{why_recommended_text(category)}")
 
-                st.markdown(f"**💡 이 영화를 추천하는 이유**: {why}")
+    st.caption(f"📊 선택 분포: {counts}")
