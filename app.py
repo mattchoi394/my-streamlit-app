@@ -8,10 +8,12 @@ st.set_page_config(page_title="🎬 나와 어울리는 영화는?", page_icon="
 TMDB_BASE = "https://api.themoviedb.org/3"
 
 # =========================
-# 장르/분석 설정
+# ✅ 수정 포인트
+# - "로맨스/드라마" 카테고리는 드라마(18) 섞지 않고
+#   TMDB 로맨스 장르(10749) 기반으로 추천하도록 변경
 # =========================
 CATEGORY_TO_GENRE_IDS = {
-    "로맨스/드라마": [10749, 18],
+    "로맨스/드라마": [10749],   # ✅ 로맨스만 사용
     "액션/어드벤처": [28],
     "SF/판타지": [878, 14],
     "코미디": [35],
@@ -27,7 +29,7 @@ CATEGORY_BADGE = {
 }
 
 REASON_BY_CATEGORY = {
-    "로맨스/드라마": "감정선과 관계에 공감하는 선택이 많아서, 몰입감 있는 **드라마/로맨스**가 잘 맞아요 💕",
+    "로맨스/드라마": "관계/감정선을 중요하게 여기는 선택이 많아서, TMDB 기준 **로맨스 영화(10749)** 위주로 추천할게요 💕",
     "액션/어드벤처": "스케일과 추진력을 선호하는 선택이 많아서, 시원한 전개가 있는 **액션/어드벤처**가 잘 맞아요 💥",
     "SF/판타지": "상상력과 세계관을 즐기는 선택이 많아서, 다른 세계로 떠나는 **SF/판타지**가 잘 맞아요 🚀",
     "코미디": "가볍게 즐기고 웃는 포인트를 중요하게 여겨서, 기분전환 되는 **코미디**가 잘 맞아요 😂",
@@ -51,6 +53,7 @@ def analyze_genre(selected_indices: List[int]) -> Tuple[str, List[int], Dict[str
     second_cat, second_score = ranked[1]
 
     blended = None
+    # 동점 또는 1점 차이면 OR로 섞기
     if top_score == second_score or (top_score - second_score == 1):
         blended = f"{top_cat} + {second_cat}"
         genre_ids = list(set(CATEGORY_TO_GENRE_IDS[top_cat] + CATEGORY_TO_GENRE_IDS[second_cat]))
@@ -110,7 +113,11 @@ def discover_movies(
 
 @st.cache_data(show_spinner=False, ttl=60 * 60)
 def movie_details(api_key: str, movie_id: int, language: str = "ko-KR") -> Dict:
-    r = requests.get(f"{TMDB_BASE}/movie/{movie_id}", params={"api_key": api_key, "language": language}, timeout=15)
+    r = requests.get(
+        f"{TMDB_BASE}/movie/{movie_id}",
+        params={"api_key": api_key, "language": language},
+        timeout=15
+    )
     r.raise_for_status()
     return r.json()
 
@@ -129,17 +136,17 @@ def compute_personal_score(
     w_votes: float,
 ) -> float:
     """
-    개인 취향 점수 = (선호도 기반) + (슬라이더 가중치 적용 최신성/평점/투표수)
-    - w_*는 0~100 입력을 0~1로 정규화해서 사용
+    개인 취향 점수(로컬):
+    - 선호도(해당 카테고리 선택 비율) + 최신성/평점/투표수(슬라이더 가중치)
     """
-    rating = float(movie.get("vote_average") or 0.0)    # 0~10
-    vote_count = float(movie.get("vote_count") or 0.0)  # large
+    rating = float(movie.get("vote_average") or 0.0)     # 0~10
+    vote_count = float(movie.get("vote_count") or 0.0)   # 큰 값
     release_date = parse_date_yyyymmdd(movie.get("release_date") or "")
 
-    # 선호도(0~1): 해당 장르를 고른 비율
+    # 선호도(0~1)
     pref_weight = float(chosen_counts.get(primary_category, 0)) / 5.0
 
-    # 최신성(0~1): 최근일수록 높음 (1년 기준 감쇠)
+    # 최신성(0~1): 최근일수록 높음 (1년 감쇠)
     recency = 0.0
     if release_date:
         days = max((datetime.now() - release_date).days, 0)
@@ -158,7 +165,7 @@ def compute_personal_score(
     wra = w_rating / 100.0
     wv = w_votes / 100.0
 
-    # 최종 점수 (선호도는 기본으로 1.5 비중)
+    # 최종 점수 (선호도는 기본 가산)
     score = (
         (pref_weight * 1.5) +
         (recency * wr) +
@@ -169,7 +176,7 @@ def compute_personal_score(
 
 def why_recommended_text(category: str) -> str:
     if category == "로맨스/드라마":
-        return "감정선이 진하고 공감 포인트가 많아서, 바쁜 학기 중에도 몰입해서 보기 좋아요 💕"
+        return "TMDB 로맨스(10749) 기준으로, **설레거나 감정선이 살아있는 로맨스 영화** 위주로 골랐어요 💕"
     if category == "액션/어드벤처":
         return "전개가 빠르고 에너지가 확 올라가서, 스트레스 풀기 딱 좋아요 💥"
     if category == "SF/판타지":
@@ -192,11 +199,9 @@ with st.sidebar:
 
     st.subheader("🎛️ 개인 취향 가중치(슬라이더)")
     st.caption("‘개인 취향 가중치’ 정렬에서만 적용돼요.")
-
     w_recency = st.slider("최신성 가중치", 0, 100, 30, 5)
     w_rating = st.slider("평점 가중치", 0, 100, 50, 5)
     w_votes = st.slider("투표수 가중치", 0, 100, 20, 5)
-
     st.caption("팁: 평점↑ = 완성도 중심, 최신성↑ = 최신작 위주, 투표수↑ = 대중성/화제성 반영")
 
 st.divider()
@@ -282,11 +287,11 @@ if st.button("🔮 결과 보기"):
     with st.spinner("🎬 TMDB에서 영화를 불러오는 중..."):
         try:
             if is_personal:
-                # 후보 많이 가져온 뒤 로컬 점수 재정렬
+                # 후보를 넉넉히 불러온 뒤 로컬 점수로 재정렬
                 candidates = discover_movies(
                     tmdb_key, with_genres,
                     sort_by="popularity.desc",
-                    page=1, n=30
+                    page=1, n=40
                 )
                 scored = []
                 for m in candidates:
@@ -365,3 +370,4 @@ if st.button("🔮 결과 보기"):
 
                     st.markdown("💡 **이 영화를 추천하는 이유**")
                     st.write(why_recommended_text(category))
+
