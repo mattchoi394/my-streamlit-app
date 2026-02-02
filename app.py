@@ -5,15 +5,15 @@ from typing import Dict, List, Tuple, Optional
 
 st.set_page_config(page_title="🎬 나와 어울리는 영화는?", page_icon="🎬", layout="wide")
 
-# =========================
-# TMDB / 장르 설정
-# =========================
 TMDB_BASE = "https://api.themoviedb.org/3"
 
+# =========================
+# 장르/분석 설정
+# =========================
 CATEGORY_TO_GENRE_IDS = {
-    "로맨스/드라마": [10749, 18],  # 로맨스 + 드라마
+    "로맨스/드라마": [10749, 18],
     "액션/어드벤처": [28],
-    "SF/판타지": [878, 14],        # SF + 판타지
+    "SF/판타지": [878, 14],
     "코미디": [35],
 }
 
@@ -33,20 +33,15 @@ REASON_BY_CATEGORY = {
     "코미디": "가볍게 즐기고 웃는 포인트를 중요하게 여겨서, 기분전환 되는 **코미디**가 잘 맞아요 😂",
 }
 
-# TMDB Discover sort_by 매핑
 SORT_OPTIONS = {
     "인기순 (TMDB)": ("popularity.desc", False),
     "평점 높은순 (TMDB)": ("vote_average.desc", False),
     "최신 개봉순 (TMDB)": ("primary_release_date.desc", False),
     "투표수 많은순 (TMDB)": ("vote_count.desc", False),
-    "개인 취향 가중치 (로컬 점수)": (None, True),  # 로컬 재정렬
+    "개인 취향 가중치 (로컬 점수)": (None, True),
 }
 
 def analyze_genre(selected_indices: List[int]) -> Tuple[str, List[int], Dict[str, int], Optional[str]]:
-    """
-    1등 카테고리 선택.
-    동점/근접(1점 차)이면 2개 카테고리를 OR로 섞어 추천 폭 확장.
-    """
     counts = {k: 0 for k in CATEGORY_TO_GENRE_IDS.keys()}
     for idx in selected_indices:
         counts[INDEX_TO_CATEGORY[idx]] += 1
@@ -64,7 +59,6 @@ def analyze_genre(selected_indices: List[int]) -> Tuple[str, List[int], Dict[str
     return top_cat, CATEGORY_TO_GENRE_IDS[top_cat], counts, None
 
 def with_genres_or(genre_ids: List[int]) -> str:
-    # OR 조합은 | 사용
     return "|".join(str(g) for g in genre_ids)
 
 @st.cache_data(show_spinner=False, ttl=60 * 60 * 24)
@@ -126,34 +120,50 @@ def parse_date_yyyymmdd(s: str) -> Optional[datetime]:
     except Exception:
         return None
 
-def compute_personal_score(movie: Dict, primary_category: str, chosen_counts: Dict[str, int]) -> float:
+def compute_personal_score(
+    movie: Dict,
+    primary_category: str,
+    chosen_counts: Dict[str, int],
+    w_recency: float,
+    w_rating: float,
+    w_votes: float,
+) -> float:
     """
-    개인 취향 가중치(로컬):
-    - 장르 매칭(선택 분포 기반) + 평점 + 투표수 + 최신성(약하게)
+    개인 취향 점수 = (선호도 기반) + (슬라이더 가중치 적용 최신성/평점/투표수)
+    - w_*는 0~100 입력을 0~1로 정규화해서 사용
     """
-    rating = float(movie.get("vote_average") or 0.0)         # 0~10
-    vote_count = float(movie.get("vote_count") or 0.0)       # 큰 값
+    rating = float(movie.get("vote_average") or 0.0)    # 0~10
+    vote_count = float(movie.get("vote_count") or 0.0)  # large
     release_date = parse_date_yyyymmdd(movie.get("release_date") or "")
-    today = datetime.now()
 
-    # 최신성 점수(0~1 정도): 최근일수록 조금 가산
+    # 선호도(0~1): 해당 장르를 고른 비율
+    pref_weight = float(chosen_counts.get(primary_category, 0)) / 5.0
+
+    # 최신성(0~1): 최근일수록 높음 (1년 기준 감쇠)
     recency = 0.0
     if release_date:
-        days = max((today - release_date).days, 0)
-        # 0일=1.0, 365일 이상=0.0으로 선형 감소 (너무 과하면 취향을 깨서 약하게만 반영)
+        days = max((datetime.now() - release_date).days, 0)
         recency = max(0.0, 1.0 - (days / 365.0))
 
-    # 취향 분포(0~5): 사용자가 그 장르를 많이 고를수록 가중치 증가
-    pref_weight = float(chosen_counts.get(primary_category, 0)) / 5.0  # 0~1
-    # 투표수는 스케일이 너무 커서 로그 형태로 완화
-    vote_component = (0.0 if vote_count <= 0 else (min(1.0, (vote_count ** 0.5) / 200.0)))
+    # 투표수(0~1): sqrt로 완화 + 캡
+    vote_component = 0.0
+    if vote_count > 0:
+        vote_component = min(1.0, (vote_count ** 0.5) / 200.0)
 
-    # 최종 점수(가중치는 취향 중심으로)
+    # 평점(0~1)
+    rating_component = max(0.0, min(1.0, rating / 10.0))
+
+    # 가중치 정규화(0~1)
+    wr = w_recency / 100.0
+    wra = w_rating / 100.0
+    wv = w_votes / 100.0
+
+    # 최종 점수 (선호도는 기본으로 1.5 비중)
     score = (
-        (pref_weight * 2.0) +
-        (rating / 10.0 * 1.4) +
-        (vote_component * 0.9) +
-        (recency * 0.4)
+        (pref_weight * 1.5) +
+        (recency * wr) +
+        (rating_component * wra) +
+        (vote_component * wv)
     )
     return score
 
@@ -171,18 +181,23 @@ def why_recommended_text(category: str) -> str:
 # UI
 # =========================
 st.title("🎬 나와 어울리는 영화는?")
-st.write("질문 5개로 당신의 영화 취향(장르)을 분석하고, 그 장르의 인기 영화를 추천해드려요 🍿✨")
+st.write("질문 5개로 취향을 분석하고, 원하는 기준(최신성/평점/투표수)에 따라 추천을 조절해보세요 🎛️✨")
 
 with st.sidebar:
     st.header("🔑 TMDB 설정")
     tmdb_key = st.text_input("TMDB API Key", type="password", placeholder="여기에 TMDB API Key 입력")
     st.divider()
-    sort_label = st.selectbox(
-        "정렬 옵션",
-        list(SORT_OPTIONS.keys()),
-        index=0
-    )
-    st.caption("※ ‘개인 취향 가중치’는 후보를 더 많이 불러온 뒤 점수로 재정렬해요.")
+
+    sort_label = st.selectbox("정렬 옵션", list(SORT_OPTIONS.keys()), index=0)
+
+    st.subheader("🎛️ 개인 취향 가중치(슬라이더)")
+    st.caption("‘개인 취향 가중치’ 정렬에서만 적용돼요.")
+
+    w_recency = st.slider("최신성 가중치", 0, 100, 30, 5)
+    w_rating = st.slider("평점 가중치", 0, 100, 50, 5)
+    w_votes = st.slider("투표수 가중치", 0, 100, 20, 5)
+
+    st.caption("팁: 평점↑ = 완성도 중심, 최신성↑ = 최신작 위주, 투표수↑ = 대중성/화제성 반영")
 
 st.divider()
 
@@ -267,20 +282,24 @@ if st.button("🔮 결과 보기"):
     with st.spinner("🎬 TMDB에서 영화를 불러오는 중..."):
         try:
             if is_personal:
-                # 후보를 넉넉히 불러온 뒤(예: 30개) 로컬 점수로 재정렬
+                # 후보 많이 가져온 뒤 로컬 점수 재정렬
                 candidates = discover_movies(
                     tmdb_key, with_genres,
-                    sort_by="popularity.desc",  # 후보 수집은 기본 정렬로
+                    sort_by="popularity.desc",
                     page=1, n=30
                 )
-                # 점수화
                 scored = []
                 for m in candidates:
-                    scored.append((compute_personal_score(m, category, counts), m))
+                    score = compute_personal_score(
+                        m, category, counts,
+                        w_recency=w_recency,
+                        w_rating=w_rating,
+                        w_votes=w_votes
+                    )
+                    scored.append((score, m))
                 scored.sort(key=lambda x: x[0], reverse=True)
                 movies = [m for _, m in scored[:5]]
             else:
-                # TMDB 자체 정렬
                 movies = discover_movies(
                     tmdb_key, with_genres,
                     sort_by=sort_by,
@@ -295,14 +314,15 @@ if st.button("🔮 결과 보기"):
         st.warning("추천할 영화를 찾지 못했어요. 다른 선택으로 다시 시도해보세요!")
         st.stop()
 
-    title = "### 🍿 추천 영화 TOP 5"
+    header = "### 🍿 추천 영화 TOP 5"
     if blended:
-        title += f" (취향 믹스: {blended})"
-    title += f" · 정렬: {sort_label}"
-    st.markdown(title)
+        header += f" (취향 믹스: {blended})"
+    header += f" · 정렬: {sort_label}"
+    st.markdown(header)
 
-    # 4) 3열 카드 + expander 상세
+    # 4) 3열 카드 + 상세
     cols = st.columns(3, gap="large")
+
     for i, m in enumerate(movies):
         col = cols[i % 3]
         movie_id = int(m.get("id"))
