@@ -560,6 +560,7 @@ def section_survey():
         }
         st.success("설문이 저장됐어요! 이제 AI 플랜을 생성해볼까요?")
         st.session_state["step"] = 2
+        st.session_state["sidebar_step"] = 2  # ✅ 사이드바 라디오도 같이 동기화
         scroll_to_top()
         st.rerun()
 
@@ -741,6 +742,7 @@ def section_plan():
     st.markdown("### ✅ 다음 단계: 체크인")
     if st.button("➡️ 체크인 화면으로 이동", use_container_width=True):
         st.session_state["step"] = 3
+        st.session_state["sidebar_step"] = 3  # ✅ 사이드바 라디오도 같이 동기화
         scroll_to_top()
         st.rerun()
 
