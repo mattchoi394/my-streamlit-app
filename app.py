@@ -862,3 +862,5 @@ with st.expander("ℹ️ 실행 방법 / 키 입력 / SQLite 확장 설계"):
 1) 패키지 설치
 ```bash
 pip install streamlit pandas openai
+"""
+)
