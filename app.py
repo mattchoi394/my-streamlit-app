@@ -25,6 +25,16 @@ import pandas as pd
 import streamlit as st
 from openai import OpenAI  # pip install openai
 
+def scroll_to_top():
+    st.components.v1.html(
+        """
+        <script>
+          window.parent.scrollTo(0, 0);
+        </script>
+        """,
+        height=0,
+    )
+
 # =========================================================
 # 기본 설정
 # =========================================================
@@ -55,15 +65,51 @@ _init_state()
 # 사이드바: 키/모델/네비게이션
 # =========================================================
 with st.sidebar:
+    # -------------------------
+    # (선택) 스크롤 맨 위로 올리기 유틸
+    # - 이미 파일에 같은 함수가 있다면 이 함수는 제거해도 됨
+    # -------------------------
+    import streamlit.components.v1 as components
+
+    def scroll_to_top():
+        components.html(
+            """
+            <script>
+              window.parent.scrollTo(0, 0);
+            </script>
+            """,
+            height=0,
+        )
+
     st.header("🔑 OpenAI 설정")
     openai_key_input = st.text_input("OpenAI API Key", type="password", placeholder="sk-... (사이드바 입력)")
     model_name = st.text_input("모델", value=MODEL_DEFAULT)
 
     st.divider()
     st.header("🧭 이동")
+
     step_label = {1: "1) 설문", 2: "2) 플랜/리마인더", 3: "3) 체크인/기록"}
-    step = st.radio("단계", options=[1, 2, 3], format_func=lambda x: step_label[x], index=st.session_state["step"] - 1)
-    st.session_state["step"] = step
+
+    # ✅ 라디오 변경 시: step 업데이트 + 상단 스크롤
+    def on_step_change():
+        st.session_state["step"] = st.session_state["sidebar_step"]
+        scroll_to_top()
+
+    # ✅ 현재 step을 라디오에 반영(초기값 동기화)
+    if "sidebar_step" not in st.session_state:
+        st.session_state["sidebar_step"] = st.session_state.get("step", 1)
+    else:
+        # 다른 버튼(설문 저장/체크인 이동)으로 step이 바뀐 경우에도 라디오가 따라오게
+        st.session_state["sidebar_step"] = st.session_state.get("step", 1)
+
+    st.radio(
+        "단계",
+        options=[1, 2, 3],
+        format_func=lambda x: step_label[x],
+        index=int(st.session_state["sidebar_step"]) - 1,
+        key="sidebar_step",
+        on_change=on_step_change,
+    )
 
     st.divider()
     st.header("🧰 유틸")
@@ -514,6 +560,7 @@ def section_survey():
         }
         st.success("설문이 저장됐어요! 이제 AI 플랜을 생성해볼까요?")
         st.session_state["step"] = 2
+        scroll_to_top()
         st.rerun()
 
     # 저장된 설문 요약
@@ -694,6 +741,7 @@ def section_plan():
     st.markdown("### ✅ 다음 단계: 체크인")
     if st.button("➡️ 체크인 화면으로 이동", use_container_width=True):
         st.session_state["step"] = 3
+        scroll_to_top()
         st.rerun()
 
 
