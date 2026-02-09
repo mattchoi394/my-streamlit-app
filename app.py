@@ -4,10 +4,10 @@ from datetime import date
 st.set_page_config(page_title="🧩 습관 트래커", page_icon="🧩")
 
 # =========================
-# 1) 세션 상태 초기화
+# 세션 상태 초기화
 # =========================
 if "habit_logs" not in st.session_state:
-    st.session_state["habit_logs"] = []  # 저장된 기록 리스트
+    st.session_state["habit_logs"] = []
 
 # =========================
 # UI
@@ -17,48 +17,54 @@ st.write("오늘의 습관을 체크하고 기록을 저장해보세요! ✨")
 
 st.divider()
 
-# 오늘 날짜
 today = date.today()
 st.subheader("📅 오늘 날짜")
 st.info(f"오늘은 **{today.strftime('%Y-%m-%d')}** 입니다 😊")
 
 st.divider()
 
-# 습관 체크
-st.subheader("✅ 오늘의 습관 체크")
-workout_done = st.checkbox("🏃 운동하기")
-reading_done = st.checkbox("📚 독서하기")
-water_done = st.checkbox("💧 물 마시기")
+# =========================
+# 습관 체크 + 입력
+# =========================
+st.subheader("✅ 오늘의 습관 체크 & 기록")
+
+# 1) 물 주기적으로 마시기
+st.markdown("### 💧 물 주기적으로 마시기")
+water_ok = st.checkbox("💧 오늘 물을 규칙적으로 마셨나요?")
+water_cups = st.number_input("🥤 물 마신 컵 수", min_value=0, max_value=50, value=0, step=1)
 
 st.divider()
 
-# 숫자 입력
-st.subheader("📌 오늘의 기록 입력")
-col1, col2, col3 = st.columns(3)
+# 2) 일정한 수면 시간 유지하기
+st.markdown("### 😴 일정한 수면 시간 유지하기")
+sleep_ok = st.checkbox("😴 오늘 일정한 수면 시간을 유지했나요?")
+sleep_hours = st.slider("🛌 수면 시간(시간)", min_value=0.0, max_value=12.0, value=7.0, step=0.5)
 
-with col1:
-    workout_time = st.number_input("🏃 운동 시간(분)", min_value=0, max_value=600, value=0, step=10)
+st.divider()
 
-with col2:
-    reading_pages = st.number_input("📚 독서 페이지(장)", min_value=0, max_value=1000, value=0, step=5)
-
-with col3:
-    water_count = st.number_input("💧 물 마신 횟수(컵)", min_value=0, max_value=50, value=0, step=1)
+# 3) 하루 2시간 이상 스크롤링 하지 않기
+st.markdown("### 📵 하루 2시간 이상 스크롤링 하지 않기")
+scroll_ok = st.checkbox("📵 오늘 스크롤링을 2시간 미만으로 했나요?")
+scroll_minutes = st.number_input("📱 스크롤링 시간(분) (유튜브/인스타 등)", min_value=0, max_value=1440, value=0, step=10)
+st.caption("✅ 목표: 120분 미만")
 
 st.divider()
 
 # =========================
-# 2) 저장 버튼 -> 세션 리스트에 추가
+# 저장 버튼 -> 세션 리스트에 추가
 # =========================
 if st.button("💾 저장하기"):
     log = {
         "date": today.strftime("%Y-%m-%d"),
-        "workout_done": workout_done,
-        "reading_done": reading_done,
-        "water_done": water_done,
-        "workout_time": workout_time,
-        "reading_pages": reading_pages,
-        "water_count": water_count,
+
+        "water_ok": water_ok,
+        "water_cups": water_cups,
+
+        "sleep_ok": sleep_ok,
+        "sleep_hours": sleep_hours,
+
+        "scroll_ok": scroll_ok,
+        "scroll_minutes": scroll_minutes,
     }
 
     st.session_state["habit_logs"].append(log)
@@ -67,16 +73,24 @@ if st.button("💾 저장하기"):
 st.divider()
 
 # =========================
-# 3) 저장된 기록 보여주기
+# 저장된 기록 보여주기
 # =========================
 st.subheader("📚 저장된 기록")
 
-if len(st.session_state["habit_logs"]) == 0:
+if not st.session_state["habit_logs"]:
     st.info("아직 저장된 기록이 없어요. 오늘 기록을 저장해보세요! 📝")
 else:
     for i, log in enumerate(reversed(st.session_state["habit_logs"]), start=1):
         st.write(f"### 🗓️ 기록 {i} - {log['date']}")
-        st.write(f"- 🏃 운동: {'✅' if log['workout_done'] else '❌'} ({log['workout_time']}분)")
-        st.write(f"- 📚 독서: {'✅' if log['reading_done'] else '❌'} ({log['reading_pages']}장)")
-        st.write(f"- 💧 물: {'✅' if log['water_done'] else '❌'} ({log['water_count']}컵)")
+
+        st.write(f"- 💧 물: {'✅' if log['water_ok'] else '❌'} (🥤 {log['water_cups']}컵)")
+        st.write(f"- 😴 수면: {'✅' if log['sleep_ok'] else '❌'} (🛌 {log['sleep_hours']}시간)")
+        st.write(f"- 📵 스크롤링: {'✅' if log['scroll_ok'] else '❌'} (📱 {log['scroll_minutes']}분)")
+
+        # 목표 대비 표시(추가로 보기 좋게)
+        if log["scroll_minutes"] < 120:
+            st.caption("📵 스크롤링 목표 달성! (120분 미만)")
+        else:
+            st.caption("⚠️ 스크롤링 시간이 120분 이상이에요. 내일은 조금만 줄여봐요!")
+
         st.divider()
