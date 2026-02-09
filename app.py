@@ -839,13 +839,11 @@ def section_checkin():
 # =========================================================
 step = st.session_state["step"]
 
-# 상단 안내
-tabs = st.tabs(["📝 1) 설문", "🧠 2) 플랜/리마인더", "✅ 3) 체크인/기록"])
-with tabs[0]:
+if step == 1:
     section_survey()
-with tabs[1]:
+elif step == 2:
     section_plan()
-with tabs[2]:
+else:
     section_checkin()
 
 # step 라디오와 탭을 함께 쓸 때 UX 보완 (원하면 주석 처리 가능)
