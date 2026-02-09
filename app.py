@@ -856,8 +856,11 @@ with tabs[2]:
 # 하단: 안내 / SQLite 확장 설계
 # =========================================================
 with st.expander("ℹ️ 실행 방법 / 키 입력 / SQLite 확장 설계"):
-    st.markdown("""
+    st.markdown(
+        """
 ### 실행 방법
 1) 패키지 설치
 ```bash
 pip install streamlit pandas openai
+"""
+)
